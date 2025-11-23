@@ -1,0 +1,11 @@
+# Fichiers système et environnements (TRES LOURD)
+venv/
+__pycache__/
+.DS_Store
+
+# Fichiers de secrets (DANGER DE MORT SI PUBLIÉ)
+.env
+
+# Fichiers temporaires
+*.pyc
+.streamlit/
