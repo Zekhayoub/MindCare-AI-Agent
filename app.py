@@ -2,14 +2,15 @@ import streamlit as st
 import time
 import pandas as pd
 import altair as alt
+import tiktoken 
 from langchain_core.messages import HumanMessage, AIMessage
 
 # --- IMPORTS BACKEND ---
 try:
     from final_agent import agent_executor
-    from mindcare_tools import MindCareTools 
+    from mindcare_tools import MindCareTools, LOCATIONS 
 except ImportError:
-    st.error("⚠️ Fichiers manquants. Assurez-vous d'être dans le bon dossier.")
+    st.error(" Fichiers manquants. Assurez-vous d'être dans le bon dossier.")
     st.stop()
 
 tools_instance = MindCareTools()
@@ -31,6 +32,7 @@ st.markdown("""
         padding: 10px;
         border-radius: 10px;
         text-align: center;
+        border: 1px solid #e0e0e0;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -39,17 +41,6 @@ st.markdown("""
 EMOTION_COLORS = {
     "Joy": "#FFD700", "Love": "#FF69B4", "Surprise": "#FFA500",
     "Unknown": "#808080", "Fear": "#9370DB", "Sadness": "#1E90FF", "Anger": "#FF4500"
-}
-
-# --- COORDONNÉES DES LIEUX (BRUXELLES) ---
-LOCATIONS = {
-    "sadness": {"name": "Parc de Bruxelles (Prendre l'air)", "lat": 50.8454, "lon": 4.3642},
-    "anger":   {"name": "Basic-Fit (Se défouler)", "lat": 50.8452, "lon": 4.3594},
-    "fear":    {"name": "Bibliothèque Royale (Calme)", "lat": 50.8432, "lon": 4.3571},
-    "joy":     {"name": "Grand-Place (Célébrer)", "lat": 50.8468, "lon": 4.3524},
-    "love":    {"name": "Grand-Place (Romantique)", "lat": 50.8468, "lon": 4.3524},
-    "surprise":{"name": "Musée des Sciences (Découverte)", "lat": 50.8367, "lon": 4.3766},
-    "unknown": None
 }
 
 # --- INITIALISATION MÉMOIRE ---
@@ -61,6 +52,9 @@ if "emotion_timeline" not in st.session_state:
     st.session_state.emotion_timeline = []
 if "show_kpi" not in st.session_state:
     st.session_state.show_kpi = False
+if "total_co2" not in st.session_state:
+    st.session_state.total_co2 = 0.0
+
 
 def get_emotion_score(emotion_name):
     mapping = {
@@ -69,8 +63,17 @@ def get_emotion_score(emotion_name):
     }
     return mapping.get(emotion_name.lower(), 0.0)
 
+def calculate_co2(text_input, text_output):
+    """Calcule l'empreinte carbone EXACTE."""
+    try:
+        encoding = tiktoken.get_encoding("cl100k_base")
+        tokens = len(encoding.encode(text_input + text_output))
+        return round(tokens * 0.0002, 5)
+    except:
+        return 0.0
+
 # ==================================================
-# 💬 ZONE PRINCIPALE - CHAT
+#  ZONE PRINCIPALE - CHAT
 # ==================================================
 
 st.title("🧠 MindCare AI")
@@ -99,6 +102,8 @@ if user_input:
         raw_analysis = tools_instance.classify_emotion(user_input)
         detected_emotion = raw_analysis.get('emotion', 'unknown').lower()
         confidence = raw_analysis.get('confidence', 0)
+        # On récupère bien les secondaires ici
+        secondary = raw_analysis.get('secondary_emotions', {})
         
         cap_emotion = detected_emotion.capitalize()
         if cap_emotion in st.session_state.emotion_log:
@@ -113,6 +118,7 @@ if user_input:
     except Exception:
         detected_emotion = "unknown"
         confidence = 0
+        secondary = {}
 
     # Réponse IA
     with st.chat_message("assistant", avatar="🤖"):
@@ -125,6 +131,7 @@ if user_input:
                 })
                 ai_response = response["output"]
                 
+                # Simulation écriture
                 full_response = ""
                 for chunk in ai_response.split():
                     full_response += chunk + " "
@@ -134,11 +141,37 @@ if user_input:
                 
                 st.session_state.chat_history.append(AIMessage(content=ai_response))
                 
-                # NOTE : J'ai retiré la map ici pour la mettre à la fin !
+                # --- CALCUL GREEN AI ---
+                cost = calculate_co2(user_input, ai_response)
+                st.session_state.total_co2 += cost
                 
-                with st.expander("🔍 Voir l'analyse technique (Debug)"):
-                    st.write(f"**Émotion détectée :** {detected_emotion.upper()}")
-                    st.write(f"**Confiance du modèle ML :** {confidence:.1%}")
+                # --- ZONE DEBUG AMÉLIORÉE (CORRECTION ICI) ---
+                with st.expander("🔍 Analyse Technique & Impact"):
+                    
+                    # Ligne 1 : Les indicateurs principaux
+                    c1, c2, c3 = st.columns(3)
+                    with c1:
+                        st.metric("Émotion ML", f"{detected_emotion.upper()}", f"{confidence:.0%}")
+                    with c2:
+                        # Score de positivité réintégré !
+                        st.metric("Positivité", f"{get_emotion_score(detected_emotion)}")
+                    with c3:
+                        st.metric("Coût Carbone", f"{cost} g")
+                    
+                    st.divider()
+                    
+                    # Ligne 2 : Les émotions secondaires avec barres de progression
+                    st.markdown("**Nuances émotionnelles (Secondaires > 10%) :**")
+                    if secondary:
+                        for emo, score_val in secondary.items():
+                            col_txt, col_bar = st.columns([1, 3])
+                            with col_txt:
+                                st.write(f"**{emo}**")
+                            with col_bar:
+                                # Barre de progression visuelle
+                                st.progress(float(score_val), text=f"{score_val:.1%}")
+                    else:
+                        st.caption("Aucune émotion secondaire significative détectée.")
 
             except Exception as e:
                 st.error(f"Erreur de connexion : {e}")
@@ -146,28 +179,28 @@ if user_input:
                     st.rerun()
 
 # ==================================================
-# 🧱 BARRE LATÉRALE (DASHBOARD & KPI)
+#  BARRE LATÉRALE (DASHBOARD & KPI)
 # ==================================================
 with st.sidebar:
     st.title("Tableau de Bord")
     
-    # Bouton Reset
     if st.button("🗑️ Nouvelle Session", type="primary"):
         st.session_state.chat_history = []
         st.session_state.emotion_log = {k: 0 for k in EMOTION_COLORS.keys()}
         st.session_state.emotion_timeline = []
+        st.session_state.total_co2 = 0.0
         st.session_state.show_kpi = False
         st.rerun()
         
     st.divider()
     
-    # 1. ANALYSE COMPARATIVE (AVANT)
+    # 1. ANALYSE COMPARATIVE
     st.subheader("1️⃣ Point de départ")
     initial_mood = st.slider("Comment vous sentez-vous (0-10) ?", 0, 10, 5, key="initial_mood")
     
     st.divider()
 
-    # 2. GRAPHIQUES (Calcul de la dominante pour plus tard)
+    # 2. GRAPHIQUES
     if sum(st.session_state.emotion_log.values()) > 0:
         dom_emotion = max(st.session_state.emotion_log, key=st.session_state.emotion_log.get)
     else:
@@ -177,6 +210,8 @@ with st.sidebar:
     col1, col2 = st.columns(2)
     col1.metric("Messages", len(st.session_state.emotion_timeline))
     col2.metric("Dominante", dom_emotion)
+    
+    st.metric("🌿 Impact Carbone Total", f"{st.session_state.total_co2:.4f} gCO2")
 
     if len(st.session_state.emotion_timeline) > 0:
         df_time = pd.DataFrame(st.session_state.emotion_timeline)
@@ -197,14 +232,13 @@ with st.sidebar:
 
     st.divider()
 
-    # 3. ANALYSE COMPARATIVE (APRÈS - BILAN & MAP)
+    # 3. ANALYSE COMPARATIVE (BILAN)
     st.subheader("2️⃣ Bilan & Action")
     
     if st.button("🏁 Clôturer la session"):
         st.session_state.show_kpi = True
     
     if st.session_state.show_kpi:
-        # A. Le KPI
         final_mood = st.slider("Comment vous sentez-vous MAINTENANT ?", 0, 10, initial_mood, key="final_mood")
         gain = final_mood - initial_mood
         
@@ -214,8 +248,6 @@ with st.sidebar:
         if gain > 0:
             st.balloons()
         
-        # B. La Carte (Recommendation Finale)
-        # On se base sur l'émotion DOMINANTE de la session
         if dom_emotion != "-":
             location_data = LOCATIONS.get(dom_emotion.lower())
             
