@@ -1,1 +1,1 @@
-# AI-Recycling-Assistant
+# MindCare-AI-Agent
